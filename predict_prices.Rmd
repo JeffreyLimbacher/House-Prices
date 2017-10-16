@@ -1,0 +1,113 @@
+---
+title: "House Prices"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+
+test<-read_csv("test.csv")
+train<-read_csv("train.csv")
+
+```
+
+Combine the train and test set so I can make modifications to the variables and such to both the train and test set.
+```{r include=TRUE}
+total<-bind_rows(train,test)
+```
+
+```{r echo=TRUE}
+head(train)
+```
+
+
+# Cleaning the data
+
+Let's figure out which columns have NA's and how bad our situation is. 
+
+```{r echo=TRUE}
+apply(apply(total,2,is.na),2,sum)
+```
+
+We can ignore the number of NAs for SalePrice since those just correspond to the test set. We can see that there are many NA's for LotFrontage. 
+
+The NA's for Alley is actually information. NA means no alley access, so we change the NA's of Alley to that.
+
+```{r echo=TRUE}
+total$Alley[is.na(total$Alley)]="No alley access"
+
+```
+
+Do the same for the other variables that list NA as a value
+
+```{r echo=TRUE}
+
+bsmt_nas<-which(is.na(total$BsmtCond) &
+        is.na(total$BsmtExposure) &
+        is.na(total$BsmtFinType1) &
+        is.na(total$BsmtFinType2) &
+        is.na(total$BsmtQual))
+
+bsmt<-total[bsmt_nas,]
+```
+
+There is a row in bsmt that has NAs in the basement square footage variables as well. We will set the rest of these to 0.
+
+```{r echo=TRUE}
+bsmt[53,] %>%
+  select(BsmtQual:TotalBsmtSF)
+```
+
+```{r echo=TRUE}
+total$BsmtCond[bsmt_nas]<-"No basement"
+total$BsmtExposure[bsmt_nas]<-"No basement"
+total$BsmtFinType1[bsmt_nas]<-"No basement"
+total$BsmtFinType2[bsmt_nas]<-"No basement"
+total$BsmtQual[bsmt_nas]<-"No basement"
+total$BsmtFinSF1[bsmt_nas]<-0
+total$BsmtFinSF2[bsmt_nas]<-0
+total$BsmtUnfSF[bsmt_nas]<-0
+total$TotalBsmtSF[bsmt_nas]<-0
+```
+
+We still have some basement fields with NAs here, but I can't see any pattern among them.
+
+Fireplaces has no NAs, but Fireplace quality has a bunch.
+
+```{r echo=TRUE}
+total$FireplaceQu[total$Fireplaces==0 & is.na(total$FireplaceQu)]<-"No fireplace"
+which(is.na(total$FireplaceQu))
+```
+
+Fix pool problems, but we are still left with NA's in the test set 
+```{r echo=TRUE}
+total$PoolQC[total$PoolArea==0&is.na(total$PoolQC)]<-"No pool"
+which(is.na(total$PoolQC))
+```
+
+```{r echo=TRUE}
+garage_nas<-total$GarageArea==0 & 
+  is.na(total$GarageQual) & 
+  is.na(total$GarageCond) & 
+  is.na(total$GarageType) &
+  is.na(total$GarageFinish)
+total$GarageCond<-"No garage"
+total$GarageQual<-"No garage"
+total$GarageType<-"No garage"
+total$GarageFinish<-"No garage"
+```
+
+
+```{r echo=TRUE}
+total$Fence[is.na(total$Fence)]="No fence"
+```
+How many NA's have we removed?
+
+```{r echo=TRUE}
+apply(apply(total,2,is.na),2,sum)
+```
+
+#Pruning
+
+LotFrontage still has many NA's. It's probably not very impactful on the sale price, so we can ignore it.
