@@ -6,7 +6,9 @@ output: html_document
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
-
+library(mice)
+library(randomForest)
+library(modelr)
 test<-read_csv("test.csv")
 train<-read_csv("train.csv")
 
@@ -20,7 +22,13 @@ total<-bind_rows(train,test)
 ```{r echo=TRUE}
 head(train)
 ```
+#Data exploration
 
+```{r echo=TRUE}
+total %>% 
+  ggplot() +
+  geom_point(aes(x=LotArea,y=SalePrice))
+```
 
 # Cleaning the data
 
@@ -43,11 +51,12 @@ Do the same for the other variables that list NA as a value
 
 ```{r echo=TRUE}
 
-bsmt_nas<-which(is.na(total$BsmtCond) &
+bsmt_nas<-which((is.na(total$BsmtCond) &
         is.na(total$BsmtExposure) &
         is.na(total$BsmtFinType1) &
         is.na(total$BsmtFinType2) &
-        is.na(total$BsmtQual))
+        is.na(total$BsmtQual) &
+        is.na(total$TotalBsmtSF)) | total$TotalBsmtSF==0)
 
 bsmt<-total[bsmt_nas,]
 ```
@@ -68,6 +77,8 @@ total$BsmtQual[bsmt_nas]<-"No basement"
 total$BsmtFinSF1[bsmt_nas]<-0
 total$BsmtFinSF2[bsmt_nas]<-0
 total$BsmtUnfSF[bsmt_nas]<-0
+total$BsmtHalfBath<-0
+total$BsmtFullBath<-0
 total$TotalBsmtSF[bsmt_nas]<-0
 ```
 
@@ -87,27 +98,129 @@ which(is.na(total$PoolQC))
 ```
 
 ```{r echo=TRUE}
-garage_nas<-total$GarageArea==0 & 
+garage_nas<-total$GarageArea==0 | (
+  is.na(total$GarageArea) & 
+  is.na(total$GarageCars) &      
+  is.na(total$GarageCond) &
+  is.na(total$GarageFinish) & 
   is.na(total$GarageQual) & 
-  is.na(total$GarageCond) & 
   is.na(total$GarageType) &
-  is.na(total$GarageFinish)
-total$GarageCond<-"No garage"
-total$GarageQual<-"No garage"
-total$GarageType<-"No garage"
-total$GarageFinish<-"No garage"
+  is.na(total$GarageYrBlt))
+total$GarageArea[garage_nas]<-0
+total$GarageCars[garage_nas]<-0
+total$GarageCond[garage_nas]<-"No garage"
+total$GarageFinish[garage_nas]<-"No garage"
+total$GarageQual[garage_nas]<-"No garage"
+total$GarageType[garage_nas]<-"No garage"
+total$GarageYrBlt[garage_nas]<-NA #Not sure what to do here yet
 ```
 
 
 ```{r echo=TRUE}
 total$Fence[is.na(total$Fence)]="No fence"
 ```
-How many NA's have we removed?
+
+
+For MiscFeature, we will also treat NAs as just no extra feature
+
+```{r echo=TRUE}
+total$MiscFeature[is.na(total$MiscFeature)]<-"None"
+```
+
+
+How many NAs have we removed?
 
 ```{r echo=TRUE}
 apply(apply(total,2,is.na),2,sum)
 ```
 
-#Pruning
+Treat each case individually, just replace with modes and medians
 
-LotFrontage still has many NA's. It's probably not very impactful on the sale price, so we can ignore it.
+```{r echo=TRUE}
+total$MSZoning[is.na(total$MSZoning)]=mode(total$MSZoning)
+total$Utilities[is.na(total$Utilities)]=mode(total$Utilities)
+total$Exterior1st[is.na(total$Exterior1st)]=mode(total$Exterior1st)
+total$Exterior2nd[is.na(total$Exterior2nd)]=mode(total$Exterior2nd)
+total$MasVnrType[is.na(total$MasVnrType)]=mode(total$MasVnrType)
+total$MasVnrArea[is.na(total$MasVnrArea)]=median(total$MasVnrArea,na.rm=TRUE)
+total$BsmtQual[is.na(total$BsmtQual)]=mode(total$BsmtQual)
+total$BsmtCond[is.na(total$BsmtCond)]=mode(total$BsmtCond)
+total$BsmtExposure[is.na(total$BsmtExposure)]=mode(total$BsmtExposure)
+total$BsmtFinType2[is.na(total$BsmtFinType2)]=mode(total$BsmtFinType2)
+total$Electrical[is.na(total$Electrical)]=mode(total$Electrical)
+total$KitchenQual[is.na(total$KitchenQual)]=mode(total$KitchenQual)
+total$Functional[is.na(total$Functional)]=mode(total$Functional)
+total$GarageFinish[is.na(total$GarageFinish)]=mode(total$GarageFinish)
+total$GarageCars[is.na(total$GarageCars)]=median(total$GarageCars,na.rm=TRUE)
+total$GarageArea[is.na(total$GarageArea)]=median(total$GarageArea,na.rm=TRUE)
+total$GarageQual[is.na(total$GarageQual)]=mode(total$GarageQual)
+total$GarageCond[is.na(total$GarageCond)]=mode(total$GarageCond)
+total$PoolQC[is.na(total$PoolQC)]=mode(total$PoolQC)
+total$SaleType[is.na(total$SaleType)]=mode(total$SaleType)
+
+```
+
+```{r echo=TRUE}
+apply(apply(total,2,is.na),2,sum)
+```
+Use the mice package to impute the LotFrontage
+
+```{r echo=FALSE}
+set.seed(927)
+
+total<-type_convert(total,cols(MSSubClass=col_character(),MoSold=col_character()))
+
+#gather all the names of the columns that are factors
+fact_vars <- total %>%
+  summarise_all(class) %>%
+  gather() %>%
+  filter(value=="character") %>%
+  .[["key"]]
+
+total <- total %>%
+  mutate_if(is.character,as.factor)
+
+#select the variables we want for the mice model
+mice_subset <- total %>%
+  select(-Id,-Condition1,-Condition2,-(BsmtQual:Electrical),-(BsmtFullBath:BsmtHalfBath),-SalePrice,-GarageYrBlt)
+  
+mice_mod<-mice(mice_subset,method='rf')
+mice_output<-complete(mice_mod)
+
+total$LotFrontage<-mice_output$LotFrontage
+```
+```{r echo=TRUE}
+apply(apply(total,2,is.na),2,sum)
+```
+```{r echo=TRUE}
+
+#take log of saleprice
+
+total <- total %>% mutate(SalePrice=log(SalePrice))
+
+#change variable names that give randomforest problems
+names(total)[names(total)=="1stFlrSF"]<-"FirstFlrSF"
+names(total)[names(total)=="2ndFlrSF"]<-"SecondFlrSF"
+names(total)[names(total)=="3SsnPorch"]<-"ThirdSsnPorch"
+
+#separate the training and test data again for the prediction
+train <- total %>%
+  filter(!is.na(SalePrice)) %>%
+  select(-MSZoning,-GarageYrBlt,-Id)
+test <- total %>%
+  filter(is.na(SalePrice)) %>%
+  select(-MSZoning,-GarageYrBlt,-Id)
+
+model<-randomForest(SalePrice ~ ., data=train)
+
+prediction<-predict(model, test)
+
+output <- test %>%
+  add_predictions(model,"lSalePrice") %>%
+  mutate(SalePrice=exp(lSalePrice)) %>%
+  select(SalePrice)
+
+
+preds<-total %>% filter(is.na(SalePrice)) %>%select(Id) %>% cbind(output)
+write_csv(preds,"sub.csv")
+```
