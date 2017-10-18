@@ -206,10 +206,10 @@ names(total)[names(total)=="3SsnPorch"]<-"ThirdSsnPorch"
 #separate the training and test data again for the prediction
 train <- total %>%
   filter(!is.na(SalePrice)) %>%
-  select(-MSZoning,-GarageYrBlt,-Id)
+  select(-MSZoning,-GarageYrBlt,-Id,-LotFrontage)
 test <- total %>%
   filter(is.na(SalePrice)) %>%
-  select(-MSZoning,-GarageYrBlt,-Id)
+  select(-MSZoning,-GarageYrBlt,-Id,-LotFrontage)
 
 model<-randomForest(SalePrice ~ ., data=train)
 
@@ -223,4 +223,43 @@ output <- test %>%
 
 preds<-total %>% filter(is.na(SalePrice)) %>%select(Id) %>% cbind(output)
 write_csv(preds,"sub.csv")
+```
+
+Try XGBoost 
+```{r echo=TRUE}
+total_num<-total %>%
+  mutate_if(is.factor,as.integer)
+
+train <- total_num %>%
+  filter(!is.na(SalePrice)) %>%
+  select(-GarageYrBlt,-Id)
+
+test <- total_num %>%
+  filter(is.na(SalePrice)) %>%
+  select(-GarageYrBlt)
+
+trainD<- xgb.DMatrix(data=as.matrix(train[,names(train)!="SalePrice"]),label=as.matrix(train[,"SalePrice"]))
+
+cv.sparse <- xgb.cv(data = trainD,
+                    nrounds = 500,
+                    min_child_weight = 0,
+                    max_depth = 10,
+                    eta = 0.02,
+                    subsample = .7,
+                    colsample_bytree = .7,
+                    booster = "gbtree",
+                    eval_metric = "rmse",
+                    verbose = TRUE,
+                    print_every_n = 50,
+                    nfold = 4,
+                    nthread = 2,
+                    objective="reg:linear")
+
+xgb.mod<-xgb.train(params=cv.sparse$params,data=trainD, nrounds=1000,print_every_n=100)
+
+
+prediction <- predict(xgb.mod, as.matrix(test))
+
+submission<-cbind(Id=as.character(test$Id),SalePrice=exp(prediction))
+
 ```
