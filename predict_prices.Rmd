@@ -22,13 +22,6 @@ total<-bind_rows(train,test)
 ```{r echo=TRUE}
 head(train)
 ```
-#Data exploration
-
-```{r echo=TRUE}
-total %>% 
-  ggplot() +
-  geom_point(aes(x=LotArea,y=SalePrice))
-```
 
 # Cleaning the data
 
@@ -166,7 +159,8 @@ apply(apply(total,2,is.na),2,sum)
 Use the mice package to impute the LotFrontage
 
 ```{r echo=FALSE}
-set.seed(927)
+set.seed(123)
+total <- total %>% mutate(SalePrice=log(SalePrice))
 
 total<-type_convert(total,cols(MSSubClass=col_character(),MoSold=col_character()))
 
@@ -196,33 +190,32 @@ apply(apply(total,2,is.na),2,sum)
 
 #take log of saleprice
 
-total <- total %>% mutate(SalePrice=log(SalePrice))
 
-#change variable names that give randomforest problems
-names(total)[names(total)=="1stFlrSF"]<-"FirstFlrSF"
-names(total)[names(total)=="2ndFlrSF"]<-"SecondFlrSF"
-names(total)[names(total)=="3SsnPorch"]<-"ThirdSsnPorch"
+# #change variable names that give randomforest problems
+# names(total)[names(total)=="1stFlrSF"]<-"FirstFlrSF"
+# names(total)[names(total)=="2ndFlrSF"]<-"SecondFlrSF"
+# names(total)[names(total)=="3SsnPorch"]<-"ThirdSsnPorch"
+# 
+# #separate the training and test data again for the prediction
+# train <- total %>%
+#   filter(!is.na(SalePrice)) %>%
+#   select(-MSZoning,-GarageYrBlt,-Id,-LotFrontage)
+# test <- total %>%
+#   filter(is.na(SalePrice)) %>%
+#   select(-MSZoning,-GarageYrBlt,-Id,-LotFrontage)
+# 
+# model<-randomForest(SalePrice ~ ., data=train)
+# 
+# prediction<-predict(model, test)
+# 
+# output <- test %>%
+#   add_predictions(model,"lSalePrice") %>%
+#   mutate(SalePrice=exp(lSalePrice)) %>%
+#   select(SalePrice)
 
-#separate the training and test data again for the prediction
-train <- total %>%
-  filter(!is.na(SalePrice)) %>%
-  select(-MSZoning,-GarageYrBlt,-Id,-LotFrontage)
-test <- total %>%
-  filter(is.na(SalePrice)) %>%
-  select(-MSZoning,-GarageYrBlt,-Id,-LotFrontage)
 
-model<-randomForest(SalePrice ~ ., data=train)
-
-prediction<-predict(model, test)
-
-output <- test %>%
-  add_predictions(model,"lSalePrice") %>%
-  mutate(SalePrice=exp(lSalePrice)) %>%
-  select(SalePrice)
-
-
-preds<-total %>% filter(is.na(SalePrice)) %>%select(Id) %>% cbind(output)
-write_csv(preds,"sub.csv")
+#preds<-total %>% filter(is.na(SalePrice)) %>%select(Id) %>% cbind(output)
+#write_csv(preds,"sub.csv")
 ```
 
 Try XGBoost 
@@ -236,12 +229,16 @@ train <- total_num %>%
 
 test <- total_num %>%
   filter(is.na(SalePrice)) %>%
-  select(-GarageYrBlt)
+  select(-GarageYrBlt,-Id)
+
+Ids <- total_num %>%
+  filter(is.na(SalePrice)) %>%
+  select(Id)
 
 trainD<- xgb.DMatrix(data=as.matrix(train[,names(train)!="SalePrice"]),label=as.matrix(train[,"SalePrice"]))
 
 cv.sparse <- xgb.cv(data = trainD,
-                    nrounds = 500,
+                    nrounds = 20000,
                     min_child_weight = 0,
                     max_depth = 10,
                     eta = 0.02,
@@ -251,8 +248,8 @@ cv.sparse <- xgb.cv(data = trainD,
                     eval_metric = "rmse",
                     verbose = TRUE,
                     print_every_n = 50,
-                    nfold = 4,
-                    nthread = 2,
+                    nfold = 2,
+                    nthread = 6,
                     objective="reg:linear")
 
 xgb.mod<-xgb.train(params=cv.sparse$params,data=trainD, nrounds=1000,print_every_n=100)
@@ -260,6 +257,6 @@ xgb.mod<-xgb.train(params=cv.sparse$params,data=trainD, nrounds=1000,print_every
 
 prediction <- predict(xgb.mod, as.matrix(test))
 
-submission<-cbind(Id=as.character(test$Id),SalePrice=exp(prediction))
+submission<-cbind(Id=Ids,SalePrice=exp(prediction))
 
 ```
